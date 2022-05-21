@@ -6,7 +6,7 @@ import SimpleITK as sitk
 import shutil
 if __name__ == '__main__':
     # this is the data folder from the oai-zib-mri.
-    oai_data_dir = '/media/yanwe/1414469C7C0E7D26/Data/OAI-ZIB-MRI/nifti'
+    oai_data_dir = '/home/lincoln/Documents/Data/OAI-ZIB-MRI/nifti'
 
     # Arbitrary task id. This is just to ensure each dataset ha a unique number. Set this to whatever ([0-999]) you
     # want

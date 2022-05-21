@@ -41,7 +41,7 @@ def convert_to_npy(args):
     else:
         npz_file, key = args
     if not isfile(npz_file[:-3] + "npy"):
-        a = np.load(npz_file)[key]
+        a = np.load(npz_file)[key].astype(np.float16)
         np.save(npz_file[:-3] + "npy", a)
 
 
