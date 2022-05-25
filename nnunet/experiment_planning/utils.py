@@ -119,7 +119,7 @@ def get_caseIDs_from_splitted_dataset_folder(folder):
     return files
 
 
-def crop(task_string, override=False, num_threads=default_num_threads):
+def crop(task_string, override=False, num_threads=default_num_threads,no_crop=False):
     cropped_out_dir = join(nnUNet_cropped_data, task_string)
     maybe_mkdir_p(cropped_out_dir)
 
@@ -131,7 +131,7 @@ def crop(task_string, override=False, num_threads=default_num_threads):
     lists, _ = create_lists_from_splitted_dataset(splitted_4d_output_dir_task)
 
     imgcrop = ImageCropper(num_threads, cropped_out_dir)
-    imgcrop.run_cropping(lists, overwrite_existing=override)
+    imgcrop.run_cropping(lists, overwrite_existing=override,no_crop=no_crop)
     shutil.copy(join(nnUNet_raw_data, task_string, "dataset.json"), cropped_out_dir)
 
 

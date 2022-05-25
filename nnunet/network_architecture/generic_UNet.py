@@ -170,13 +170,13 @@ class Generic_UNet(SegmentationNetwork):
     SPACING_FACTOR_BETWEEN_STAGES = 2
     BASE_NUM_FEATURES_3D = 30
     MAX_NUMPOOL_3D = 999
-    MAX_NUM_FILTERS_3D = 320
+    MAX_NUM_FILTERS_3D = 384
 
     DEFAULT_PATCH_SIZE_2D = (256, 256)
     BASE_NUM_FEATURES_2D = 30
     DEFAULT_BATCH_SIZE_2D = 50
     MAX_NUMPOOL_2D = 999
-    MAX_FILTERS_2D = 480
+    MAX_FILTERS_2D = 512
 
     use_this_for_batch_size_computation_2D = 19739648
     use_this_for_batch_size_computation_3D = 520000000  # 505789440

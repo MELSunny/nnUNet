@@ -104,7 +104,7 @@ def main():
         if args.verify_dataset_integrity:
             verify_dataset_integrity(join(nnUNet_raw_data, task_name))
 
-        crop(task_name, False, tf)
+        crop(task_name, False, tf,no_crop=True)
 
         tasks.append(task_name)
 

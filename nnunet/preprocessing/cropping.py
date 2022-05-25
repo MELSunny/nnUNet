@@ -136,9 +136,12 @@ class ImageCropper(object):
             maybe_mkdir_p(self.output_folder)
 
     @staticmethod
-    def crop(data, properties, seg=None):
+    def crop(data, properties, seg=None, no_crop=False):
         shape_before = data.shape
-        data, seg, bbox = crop_to_nonzero(data, seg, nonzero_label=-1)
+        if no_crop:
+            bbox=[[0,data.shape[0]],[1,data.shape[1]],[data.shape[2]]]
+        else:
+            data, seg, bbox = crop_to_nonzero(data, seg, nonzero_label=-1)
         shape_after = data.shape
         print("before crop:", shape_before, "after crop:", shape_after, "spacing:",
               np.array(properties["original_spacing"]), "\n")
@@ -150,18 +153,18 @@ class ImageCropper(object):
         return data, seg, properties
 
     @staticmethod
-    def crop_from_list_of_files(data_files, seg_file=None):
+    def crop_from_list_of_files(data_files, seg_file=None,no_crop=False):
         data, seg, properties = load_case_from_list_of_files(data_files, seg_file)
-        return ImageCropper.crop(data, properties, seg)
+        return ImageCropper.crop(data, properties, seg, no_crop)
 
-    def load_crop_save(self, case, case_identifier, overwrite_existing=False):
+    def load_crop_save(self, case, case_identifier, overwrite_existing=False,no_crop=False):
         try:
             print(case_identifier)
             if overwrite_existing \
                     or (not os.path.isfile(os.path.join(self.output_folder, "%s.npz" % case_identifier))
                         or not os.path.isfile(os.path.join(self.output_folder, "%s.pkl" % case_identifier))):
 
-                data, seg, properties = self.crop_from_list_of_files(case[:-1], case[-1])
+                data, seg, properties = self.crop_from_list_of_files(case[:-1], case[-1],no_crop)
 
                 all_data = np.vstack((data, seg))
                 np.savez_compressed(os.path.join(self.output_folder, "%s.npz" % case_identifier), data=all_data)
@@ -178,7 +181,7 @@ class ImageCropper(object):
     def get_patient_identifiers_from_cropped_files(self):
         return [i.split("/")[-1][:-4] for i in self.get_list_of_cropped_files()]
 
-    def run_cropping(self, list_of_files, overwrite_existing=False, output_folder=None):
+    def run_cropping(self, list_of_files, overwrite_existing=False, output_folder=None, no_crop=False):
         """
         also copied ground truth nifti segmentation into the preprocessed folder so that we can use them for evaluation
         on the cluster
@@ -199,7 +202,7 @@ class ImageCropper(object):
         list_of_args = []
         for j, case in enumerate(list_of_files):
             case_identifier = get_case_identifier(case)
-            list_of_args.append((case, case_identifier, overwrite_existing))
+            list_of_args.append((case, case_identifier, overwrite_existing, no_crop))
 
         p = Pool(self.num_threads)
         p.starmap(self.load_crop_save, list_of_args)
