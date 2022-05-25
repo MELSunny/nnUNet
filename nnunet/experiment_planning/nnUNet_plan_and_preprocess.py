@@ -73,6 +73,8 @@ def main():
                              "IDENTIFIER, the correct training command would be:\n"
                              "'nnUNet_train CONFIG TRAINER TASKID FOLD -p nnUNetPlans_pretrained_IDENTIFIER "
                              "-pretrained_weights FILENAME'")
+    parser.add_argument("-no_crop", action="store_true", default=False,
+                        help="No cropping")
 
     args = parser.parse_args()
     task_ids = args.task_ids
@@ -81,7 +83,7 @@ def main():
     tf = args.tf
     planner_name3d = args.planner3d
     planner_name2d = args.planner2d
-
+    no_crop=args.no_crop
     if planner_name3d == "None":
         planner_name3d = None
     if planner_name2d == "None":
@@ -104,7 +106,7 @@ def main():
         if args.verify_dataset_integrity:
             verify_dataset_integrity(join(nnUNet_raw_data, task_name))
 
-        crop(task_name, False, tf,no_crop=True)
+        crop(task_name, False, tf,no_crop=no_crop)
 
         tasks.append(task_name)
 
