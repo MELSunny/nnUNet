@@ -86,7 +86,7 @@ def get_pool_and_conv_props_poolLateV2(patch_size, min_feature_map_size, max_num
     return num_pool_per_axis, net_num_pool_op_kernel_sizes, net_conv_kernel_sizes, patch_size, must_be_divisible_by
 
 
-def get_pool_and_conv_props(spacing, patch_size, min_feature_map_size, max_numpool):
+def get_pool_and_conv_props(spacing, patch_size, min_feature_map_size, max_numpool, min_spacing_rate=2):
     """
 
     :param spacing:
@@ -108,11 +108,11 @@ def get_pool_and_conv_props(spacing, patch_size, min_feature_map_size, max_numpo
         # This is a problem because sometimes we have spacing 20, 50, 50 and we want to still keep pooling.
         # Here we would stop however. This is not what we want! Fixed in get_pool_and_conv_propsv2
         min_spacing = min(current_spacing)
-        valid_axes_for_pool = [i for i in range(dim) if current_spacing[i] / min_spacing < 2]
+        valid_axes_for_pool = [i for i in range(dim) if current_spacing[i] / min_spacing < min_spacing_rate]
         axes = []
         for a in range(dim):
             my_spacing = current_spacing[a]
-            partners = [i for i in range(dim) if current_spacing[i] / my_spacing < 2 and my_spacing / current_spacing[i] < 2]
+            partners = [i for i in range(dim) if current_spacing[i] / my_spacing < min_spacing_rate and my_spacing / current_spacing[i] < min_spacing_rate]
             if len(partners) > len(axes):
                 axes = partners
         conv_kernel_size = [3 if i in axes else 1 for i in range(dim)]
@@ -145,13 +145,18 @@ def get_pool_and_conv_props(spacing, patch_size, min_feature_map_size, max_numpo
         pool_op_kernel_sizes.append(pool_kernel_sizes)
         conv_kernel_sizes.append(conv_kernel_size)
         #print(conv_kernel_sizes)
-
+    new_pool_op_kernel_sizes=[]
+    for i in range(0, len(pool_op_kernel_sizes)):
+        if i % 2 == 0:
+            new_pool_op_kernel_sizes.append(pool_op_kernel_sizes[int(i/2)])
+        else:
+            new_pool_op_kernel_sizes.append(pool_op_kernel_sizes[len(pool_op_kernel_sizes)-int((i+1)/2)])
     must_be_divisible_by = get_shape_must_be_divisible_by(num_pool_per_axis)
     patch_size = pad_shape(patch_size, must_be_divisible_by)
 
     # we need to add one more conv_kernel_size for the bottleneck. We always use 3x3(x3) conv here
     conv_kernel_sizes.append([3]*dim)
-    return num_pool_per_axis, pool_op_kernel_sizes, conv_kernel_sizes, patch_size, must_be_divisible_by
+    return num_pool_per_axis, new_pool_op_kernel_sizes, conv_kernel_sizes, patch_size, must_be_divisible_by
 
 
 def get_pool_and_conv_props_v2(spacing, patch_size, min_feature_map_size, max_numpool):
