@@ -81,7 +81,7 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
         return target
 
     def get_properties_for_stage(self, current_spacing, original_spacing, original_shape, num_cases,
-                                 num_modalities, num_classes):
+                                 num_modalities, num_classes, z_priority=False, min_z_patch_size=16):
         """
         ExperimentPlanner configures pooling so that we pool late. Meaning that if the number of pooling per axis is
         (2, 3, 3), then the first pooling operation will always pool axes 1 and 2 and not 0, irrespective of spacing.
@@ -125,7 +125,13 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
                                                             num_classes,
                                                             pool_op_kernel_sizes, conv_per_stage=self.conv_per_stage)
         while here > ref:
-            axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
+            if z_priority:
+                if new_shp[0]>min_z_patch_size:
+                    axis_to_be_reduced = 0
+                else:
+                    axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
+            else:
+                axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
 
             tmp = deepcopy(new_shp)
             tmp[axis_to_be_reduced] -= shape_must_be_divisible_by[axis_to_be_reduced]
