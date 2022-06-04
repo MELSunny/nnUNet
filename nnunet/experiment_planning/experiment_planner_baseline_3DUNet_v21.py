@@ -28,8 +28,8 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
     We also increase the base_num_features to 32. This is solely because mixed precision training with 3D convs and
     amp is A LOT faster if the number of filters is divisible by 8
     """
-    def __init__(self, folder_with_cropped_data, preprocessed_output_folder):
-        super(ExperimentPlanner3D_v21, self).__init__(folder_with_cropped_data, preprocessed_output_folder)
+    def __init__(self, folder_with_cropped_data, preprocessed_output_folder,reduce_z_priority=False):
+        super(ExperimentPlanner3D_v21, self).__init__(folder_with_cropped_data, preprocessed_output_folder,reduce_z_priority)
         self.data_identifier = "nnUNetData_plans_v2.1"
         self.plans_fname = join(self.preprocessed_output_folder,
                                 "nnUNetPlansv2.1_plans_3D.pkl")
@@ -81,7 +81,7 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
         return target
 
     def get_properties_for_stage(self, current_spacing, original_spacing, original_shape, num_cases,
-                                 num_modalities, num_classes, z_priority=False, min_z_patch_size=16):
+                                 num_modalities, num_classes):
         """
         ExperimentPlanner configures pooling so that we pool late. Meaning that if the number of pooling per axis is
         (2, 3, 3), then the first pooling operation will always pool axes 1 and 2 and not 0, irrespective of spacing.
@@ -125,8 +125,8 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
                                                             num_classes,
                                                             pool_op_kernel_sizes, conv_per_stage=self.conv_per_stage)
         while here > ref:
-            if z_priority:
-                if new_shp[0]>min_z_patch_size:
+            if self.reduce_z_priority:
+                if new_shp[0]>self.min_z_patch_size:
                     axis_to_be_reduced = 0
                 else:
                     axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
