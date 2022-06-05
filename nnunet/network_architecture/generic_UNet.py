@@ -12,7 +12,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-
+import warnings
 from copy import deepcopy
 from nnunet.utilities.nd_softmax import softmax_helper
 from torch import nn
@@ -141,6 +141,217 @@ class StackedConvLayers(nn.Module):
     def forward(self, x):
         return self.blocks(x)
 
+class DepthwiseSeparableConvModule(StackedConvLayers):
+    def __init__(self, input_channels, output_channels,
+                 conv_op=nn.Conv2d, conv_kwargs=None,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                 nonlin=nn.LeakyReLU, nonlin_kwargs=None, basic_block=ConvDropoutNormNonlin):
+
+        super(DepthwiseSeparableConvModule,self).__init__(input_channels, output_channels, 2,
+                 conv_op=conv_op, conv_kwargs=conv_kwargs,
+                 norm_op=norm_op, norm_op_kwargs=norm_op_kwargs,
+                 dropout_op=dropout_op, dropout_op_kwargs=dropout_op_kwargs,
+                 nonlin=nonlin, nonlin_kwargs=nonlin_kwargs, first_stride=None, basic_block=ConvDropoutNormNonlin)
+        self.basic_block=basic_block
+        self.depthwise_conv_kwargs=deepcopy(conv_kwargs)
+        self.depthwise_conv_kwargs['groups']=input_channels
+        self.depthwise_conv = basic_block(input_channels, input_channels, self.conv_op,
+                           self.depthwise_conv_kwargs,
+                           self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                           self.nonlin, self.nonlin_kwargs)
+
+        self.pointwise_conv = basic_block(input_channels, output_channels, self.conv_op,
+                           {'kernel_size':1},
+                           self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                           self.nonlin, self.nonlin_kwargs)
+
+    def forward(self, x):
+        x = self.depthwise_conv(x)
+        x = self.pointwise_conv(x)
+        return x
+
+class ASPPModule(nn.ModuleList):
+    """Atrous Spatial Pyramid Pooling (ASPP) Module.
+    Args:
+        dilations (tuple[int]): Dilation rate of each layer.
+        input_feature_channels (int): Input channels.
+        output_feature_channels (int): Channels after modules, before conv_seg.
+        conv_cfg (dict|None): Config of conv layers.
+        norm_cfg (dict|None): Config of norm layers.
+        act_cfg (dict): Config of activation layers.
+    """
+
+    def __init__(self, dilations, input_channels, output_channels, conv_op=nn.Conv2d, conv_kwargs=None,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,nonlin=nn.LeakyReLU, nonlin_kwargs=None, basic_block=ConvDropoutNormNonlin):
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+
+        if nonlin_kwargs is None:
+            nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
+        if dropout_op_kwargs is None:
+            dropout_op_kwargs = {'p': 0.5, 'inplace': True}
+        if norm_op_kwargs is None:
+            norm_op_kwargs = {'eps': 1e-5, 'affine': True, 'momentum': 0.1}
+        if conv_kwargs is None:
+            conv_kwargs = {'kernel_size': 3, 'stride': 1, 'padding': 1, 'dilation': 1, 'bias': True}
+
+        self.nonlin_kwargs = nonlin_kwargs
+        self.nonlin = nonlin
+        self.dropout_op = dropout_op
+        self.dropout_op_kwargs = dropout_op_kwargs
+        self.norm_op_kwargs = norm_op_kwargs
+        self.conv_kwargs = conv_kwargs
+        self.conv_op = conv_op
+        self.norm_op = norm_op
+        self.basic_block=basic_block
+        self.dilations = dilations
+
+        super(ASPPModule, self).__init__()
+        for dilation in dilations:
+            dilation_conv_kwargs = deepcopy(conv_kwargs)
+            dilation_conv_kwargs['kernel_size']= 1 if dilation == 1 or (1,1,1) else 3
+            dilation_conv_kwargs['dilation'] = dilation,
+            dilation_conv_kwargs['padding'] = 0 if dilation == 1 or (1,1,1) else dilation,
+            self.append(
+                basic_block(
+                    input_channels,
+                    output_channels,conv_op=self.conv_op,
+                           conv_kwargs=dilation_conv_kwargs,
+                           norm_op=self.norm_op, norm_op_kwargs=self.norm_op_kwargs, dropout_op=self.dropout_op, dropout_op_kwargs=self.dropout_op_kwargs,
+                           nonlin=self.nonlin, nonlin_kwargs=self.nonlin_kwargs))
+
+    def forward(self, x):
+        """Forward function."""
+        aspp_outs = []
+        for aspp_module in self:
+            aspp_outs.append(aspp_module(x))
+
+        return aspp_outs
+class DepthwiseSeparableASPPModule(ASPPModule):
+    """Atrous Spatial Pyramid Pooling (ASPP) Module with depthwise separable
+    conv."""
+    def __init__(self, **kwargs):
+        super(DepthwiseSeparableASPPModule, self).__init__(**kwargs)
+        for i, dilation in enumerate(self.dilations):
+            if max(dilation) > 1:
+                dilation_conv_kwargs = deepcopy(self.conv_kwargs)
+                dilation_conv_kwargs['kernel_size'] = 3
+                dilation_conv_kwargs['dilation'] = dilation
+                dilation_conv_kwargs['padding'] = dilation
+                self[i] = DepthwiseSeparableConvModule(
+                    self.input_channels,
+                    self.output_channels,conv_op=self.conv_op, conv_kwargs=dilation_conv_kwargs,
+                 norm_op=self.norm_op, norm_op_kwargs=self.norm_op_kwargs,
+                 dropout_op=self.dropout_op, dropout_op_kwargs=self.dropout_op_kwargs,
+                 nonlin=self.nonlin, nonlin_kwargs=self.nonlin_kwargs,basic_block=self.basic_block)
+
+def resize(input,
+           size=None,
+           scale_factor=None,
+           mode='nearest',
+           align_corners=None,
+           warning=True):
+    if warning:
+        if size is not None and align_corners:
+            input_h, input_w = tuple(int(x) for x in input.shape[2:])
+            output_h, output_w = tuple(int(x) for x in size)
+            if output_h > input_h or output_w > output_h:
+                if ((output_h > 1 and output_w > 1 and input_h > 1
+                     and input_w > 1) and (output_h - 1) % (input_h - 1)
+                        and (output_w - 1) % (input_w - 1)):
+                    warnings.warn(
+                        f'When align_corners={align_corners}, '
+                        'the output would more aligned if '
+                        f'input size {(input_h, input_w)} is `x+1` and '
+                        f'out size {(output_h, output_w)} is `nx+1`')
+    return torch.nn.functional.interpolate(input, size, scale_factor, mode, align_corners)
+
+
+class DepthwiseSeparableASPPHead(nn.Module):
+    def __init__(self,input_channels, output_channels,dilations=(1, 6, 12, 18),
+                 conv_op=nn.Conv2d, conv_kwargs=None,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                 nonlin=nn.LeakyReLU, nonlin_kwargs=None,basic_block=ConvDropoutNormNonlin):
+        super(DepthwiseSeparableASPPHead, self).__init__()
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+
+        if nonlin_kwargs is None:
+            nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
+        if dropout_op_kwargs is None:
+            dropout_op_kwargs = {'p': 0.5, 'inplace': True}
+        if norm_op_kwargs is None:
+            norm_op_kwargs = {'eps': 1e-5, 'affine': True, 'momentum': 0.1}
+        if conv_kwargs is None:
+            conv_kwargs = {'kernel_size': 3, 'stride': 1, 'padding': 1, 'dilation': 1, 'bias': True}
+
+        self.nonlin_kwargs = nonlin_kwargs
+        self.nonlin = nonlin
+        self.dropout_op = dropout_op
+        self.dropout_op_kwargs = dropout_op_kwargs
+        self.norm_op_kwargs = norm_op_kwargs
+        self.conv_kwargs = conv_kwargs
+        self.conv_op = conv_op
+        self.norm_op = norm_op
+        self.basic_block=basic_block
+        self.dilations = dilations
+        image_pool_conv_kwargs=deepcopy(self.conv_kwargs)
+        image_pool_conv_kwargs['kernel_size']=1
+        if conv_op == nn.Conv3d:
+            pool_op=nn.AdaptiveAvgPool3d
+            self.intpr_mode = 'trilinear'
+        elif conv_op==nn.Conv2d:
+            pool_op=nn.AdaptiveAvgPool2d
+            self.intpr_mode = 'bilinear'
+        else:
+            raise NotImplemented
+
+        self.image_pool = nn.Sequential(
+            pool_op(1),
+            basic_block(
+                self.input_channels,
+                self.output_channels,self.conv_op,
+                           image_pool_conv_kwargs,
+                           self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                           self.nonlin, self.nonlin_kwargs))
+
+        self.aspp_modules = DepthwiseSeparableASPPModule(
+            dilations=self.dilations,
+            input_channels=self.input_channels, output_channels=self.output_channels, conv_op=conv_op, conv_kwargs=conv_kwargs,
+            norm_op=norm_op, norm_op_kwargs=norm_op_kwargs,
+            dropout_op=dropout_op, dropout_op_kwargs=dropout_op_kwargs, nonlin=nonlin, nonlin_kwargs=nonlin_kwargs,
+            basic_block=basic_block)
+
+
+        bottleneck_conv_kwargs=deepcopy(self.conv_kwargs)
+        bottleneck_conv_kwargs['kernel_size']=3
+        bottleneck_conv_kwargs['padding'] = 1
+        self.bottleneck = basic_block(
+            (len(dilations) + 1) * self.output_channels,
+            self.output_channels,self.conv_op,
+                           bottleneck_conv_kwargs,
+                           self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                           self.nonlin, self.nonlin_kwargs)
+
+    def forward(self, inputs):
+        x=inputs
+        aspp_outs = [
+            resize(
+                self.image_pool(x),
+                size=x.size()[2:],
+                mode=self.intpr_mode,
+                align_corners=False)
+        ]
+        aspp_outs.extend(self.aspp_modules(x))
+        aspp_outs = torch.cat(aspp_outs, dim=1)
+        output = self.bottleneck(aspp_outs)
+        return output
+
+
+
 
 def print_module_training_status(module):
     if isinstance(module, nn.Conv2d) or isinstance(module, nn.Conv3d) or isinstance(module, nn.Dropout3d) or \
@@ -190,7 +401,7 @@ class Generic_UNet(SegmentationNetwork):
                  conv_kernel_sizes=None,
                  upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
                  max_num_features=None, basic_block=ConvDropoutNormNonlin,
-                 seg_output_use_bias=False):
+                 seg_output_use_bias=False,ASPP=True):
         """
         basically more flexible than v1, architecture is the same
 
@@ -225,6 +436,7 @@ class Generic_UNet(SegmentationNetwork):
         self.final_nonlin = final_nonlin
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
+        self.ASPP=ASPP
 
         if conv_op == nn.Conv2d:
             upsample_mode = 'bilinear'
@@ -292,12 +504,8 @@ class Generic_UNet(SegmentationNetwork):
 
             output_features = min(output_features, self.max_num_features)
 
+
         # now the bottleneck.
-        # determine the first stride
-        if self.convolutional_pooling:
-            first_stride = pool_op_kernel_sizes[-1]
-        else:
-            first_stride = None
 
         # the output of the last conv must match the number of features from the skip connection if we are not using
         # convolutional upsampling. If we use convolutional upsampling then the reduction in feature maps will be
@@ -306,24 +514,40 @@ class Generic_UNet(SegmentationNetwork):
             final_num_features = output_features
         else:
             final_num_features = self.conv_blocks_context[-1].output_channels
-
-        self.conv_kwargs['kernel_size'] = self.conv_kernel_sizes[num_pool]
-        self.conv_kwargs['padding'] = self.conv_pad_sizes[num_pool]
-        self.conv_blocks_context.append(nn.Sequential(
-            StackedConvLayers(input_features, output_features, num_conv_per_stage - 1, self.conv_op, self.conv_kwargs,
-                              self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs, self.nonlin,
-                              self.nonlin_kwargs, first_stride, basic_block=basic_block),
-            StackedConvLayers(output_features, final_num_features, 1, self.conv_op, self.conv_kwargs,
-                              self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs, self.nonlin,
-                              self.nonlin_kwargs, basic_block=basic_block)))
+        if ASPP:
+            dilations= (pool_op_kernel_sizes[-1],[i*2 for i in pool_op_kernel_sizes[-1]],[i*4 for i in pool_op_kernel_sizes[-1]],[i*6 for i in pool_op_kernel_sizes[-1]])
+            self.conv_blocks_context.append(DepthwiseSeparableASPPHead(input_features,final_num_features,dilations=dilations,
+                                                                       conv_op=self.conv_op,conv_kwargs=self.conv_kwargs,
+                                                                       norm_op=self.norm_op,norm_op_kwargs=self.norm_op_kwargs,
+                                                                       dropout_op=self.dropout_op,dropout_op_kwargs=self.dropout_op_kwargs,
+                                                                       nonlin=self.nonlin,nonlin_kwargs=self.nonlin_kwargs,basic_block=basic_block))
+        else:
+            # determine the first stride
+            if self.convolutional_pooling:
+                first_stride = pool_op_kernel_sizes[-1]
+            else:
+                first_stride = None
+            self.conv_kwargs['kernel_size'] = self.conv_kernel_sizes[num_pool]
+            self.conv_kwargs['padding'] = self.conv_pad_sizes[num_pool]
+            self.conv_blocks_context.append(nn.Sequential(
+                StackedConvLayers(input_features, output_features, num_conv_per_stage - 1, self.conv_op, self.conv_kwargs,
+                                  self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs, self.nonlin,
+                                  self.nonlin_kwargs, first_stride, basic_block=basic_block),
+                StackedConvLayers(output_features, final_num_features, 1, self.conv_op, self.conv_kwargs,
+                                  self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs, self.nonlin,
+                                  self.nonlin_kwargs, basic_block=basic_block)))
 
         # if we don't want to do dropout in the localization pathway then we set the dropout prob to zero here
         if not dropout_in_localization:
             old_dropout_p = self.dropout_op_kwargs['p']
             self.dropout_op_kwargs['p'] = 0.0
 
+        if ASPP:
+            loop= range(1,num_pool)
+        else:
+            loop=range(num_pool)
         # now lets build the localization pathway
-        for u in range(num_pool):
+        for u in loop:
             nfeatures_from_down = final_num_features
             nfeatures_from_skip = self.conv_blocks_context[
                 -(2 + u)].output_channels  # self.conv_blocks_context[-1] is bottleneck, so start with -2
@@ -359,8 +583,13 @@ class Generic_UNet(SegmentationNetwork):
                                             1, 1, 0, 1, 1, seg_output_use_bias))
 
         self.upscale_logits_ops = []
-        cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes), axis=0)[::-1]
-        for usl in range(num_pool - 1):
+        if ASPP:
+            cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes[:-1]), axis=0)[::-1]
+            self.aspp_1=1
+        else:
+            cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes), axis=0)[::-1]
+            self.aspp_1=0
+        for usl in range(num_pool - 1-self.aspp_1):
             if self.upscale_logits:
                 self.upscale_logits_ops.append(Upsample(scale_factor=tuple([int(i) for i in cum_upsample[usl + 1]]),
                                                         mode=upsample_mode))
@@ -394,7 +623,8 @@ class Generic_UNet(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-
+        if self.ASPP:
+            skips.pop()
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skips[-(u + 1)]), dim=1)
