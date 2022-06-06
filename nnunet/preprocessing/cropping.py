@@ -139,7 +139,7 @@ class ImageCropper(object):
     def crop(data, properties, seg=None, no_crop=False):
         shape_before = data.shape
         if no_crop:
-            bbox=[[0,data.shape[0]],[1,data.shape[1]],[data.shape[2]]]
+            bbox=[[0,data.shape[1]],[0,data.shape[2]],[0,data.shape[3]]]
         else:
             data, seg, bbox = crop_to_nonzero(data, seg, nonzero_label=-1)
         shape_after = data.shape
