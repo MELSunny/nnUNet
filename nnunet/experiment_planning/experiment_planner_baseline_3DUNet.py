@@ -30,7 +30,9 @@ from nnunet.training.model_restore import recursive_find_python_class
 
 
 class ExperimentPlanner(object):
-    def __init__(self, folder_with_cropped_data, preprocessed_output_folder):
+    def __init__(self, folder_with_cropped_data, preprocessed_output_folder, reduce_z_priority=False,min_z_patch_size=16):
+        self.reduce_z_priority=reduce_z_priority
+        self.min_z_patch_size = min_z_patch_size
         self.folder_with_cropped_data = folder_with_cropped_data
         self.preprocessed_output_folder = preprocessed_output_folder
         self.list_of_cropped_npz_files = subfiles(self.folder_with_cropped_data, True, None, ".npz", True)
@@ -192,7 +194,13 @@ class ExperimentPlanner(object):
                                                             num_classes,
                                                             pool_op_kernel_sizes, conv_per_stage=self.conv_per_stage)
         while here > ref:
-            axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
+            if self.reduce_z_priority:
+                if new_shp[0]>self.min_z_patch_size:
+                    axis_to_be_reduced = 0
+                else:
+                    axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
+            else:
+                axis_to_be_reduced = np.argsort(new_shp / new_median_shape)[-1]
 
             tmp = deepcopy(new_shp)
             tmp[axis_to_be_reduced] -= shape_must_be_divisible_by[axis_to_be_reduced]

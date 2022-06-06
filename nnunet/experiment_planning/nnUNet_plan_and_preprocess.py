@@ -75,6 +75,8 @@ def main():
                              "-pretrained_weights FILENAME'")
     parser.add_argument("-no_crop", action="store_true", default=False,
                         help="No cropping")
+    parser.add_argument("-reduce_z_priority", action="store_true", default=False,
+                        help="priority reduce patch size in z axis")
 
     args = parser.parse_args()
     task_ids = args.task_ids
@@ -157,7 +159,7 @@ def main():
                 exp_planner = planner_3d(cropped_out_dir, preprocessing_output_dir_this_task, args.overwrite_plans,
                                          args.overwrite_plans_identifier)
             else:
-                exp_planner = planner_3d(cropped_out_dir, preprocessing_output_dir_this_task)
+                exp_planner = planner_3d(cropped_out_dir, preprocessing_output_dir_this_task,reduce_z_priority=args.reduce_z_priority)
             exp_planner.plan_experiment()
             if not dont_run_preprocessing:  # double negative, yooo
                 exp_planner.run_preprocessing(threads)
