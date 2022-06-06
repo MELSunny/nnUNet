@@ -211,9 +211,9 @@ class ASPPModule(nn.ModuleList):
         super(ASPPModule, self).__init__()
         for dilation in dilations:
             dilation_conv_kwargs = deepcopy(conv_kwargs)
-            dilation_conv_kwargs['kernel_size']= 1 if dilation == 1 or (1,1,1) else 3
-            dilation_conv_kwargs['dilation'] = dilation,
-            dilation_conv_kwargs['padding'] = 0 if dilation == 1 or (1,1,1) else dilation,
+            dilation_conv_kwargs['kernel_size']= 1 if (dilation == 1 or dilation ==[1,1,1]or dilation ==[1,1]) else 3
+            dilation_conv_kwargs['dilation'] = dilation
+            dilation_conv_kwargs['padding'] = 0 if (dilation == 1 or dilation ==[1,1,1]or dilation ==[1,1]) else dilation
             self.append(
                 basic_block(
                     input_channels,
@@ -515,7 +515,7 @@ class Generic_UNet(SegmentationNetwork):
         else:
             final_num_features = self.conv_blocks_context[-1].output_channels
         if ASPP:
-            dilations= (pool_op_kernel_sizes[-1],[i*2 for i in pool_op_kernel_sizes[-1]],[i*4 for i in pool_op_kernel_sizes[-1]],[i*6 for i in pool_op_kernel_sizes[-1]])
+            dilations= ([1 for i in pool_op_kernel_sizes[-1]],[i for i in pool_op_kernel_sizes[-1]],[i*2 for i in pool_op_kernel_sizes[-1]],[i*3 for i in pool_op_kernel_sizes[-1]])
             self.conv_blocks_context.append(DepthwiseSeparableASPPHead(input_features,final_num_features,dilations=dilations,
                                                                        conv_op=self.conv_op,conv_kwargs=self.conv_kwargs,
                                                                        norm_op=self.norm_op,norm_op_kwargs=self.norm_op_kwargs,
@@ -541,7 +541,6 @@ class Generic_UNet(SegmentationNetwork):
         if not dropout_in_localization:
             old_dropout_p = self.dropout_op_kwargs['p']
             self.dropout_op_kwargs['p'] = 0.0
-
         if ASPP:
             loop= range(1,num_pool)
         else:
