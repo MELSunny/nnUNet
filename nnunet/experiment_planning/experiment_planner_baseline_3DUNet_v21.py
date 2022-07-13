@@ -34,6 +34,7 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
         self.plans_fname = join(self.preprocessed_output_folder,
                                 "nnUNetPlansv2.1_plans_3D.pkl")
         self.unet_base_num_features = 32
+        self.unet_featuremap_min_edge_length = 8
 
     def get_target_spacing(self):
         """
@@ -118,7 +119,7 @@ class ExperimentPlanner3D_v21(ExperimentPlanner):
         # now. That frees up some space. The decision to go with 32 is solely due to the speedup we get (non-multiples
         # of 8 are not supported in nvidia amp)
         ref = Generic_UNet.use_this_for_batch_size_computation_3D * self.unet_base_num_features / \
-              Generic_UNet.BASE_NUM_FEATURES_3D
+              Generic_UNet.BASE_NUM_FEATURES_3D*1.1
         here = Generic_UNet.compute_approx_vram_consumption(new_shp, network_num_pool_per_axis,
                                                             self.unet_base_num_features,
                                                             self.unet_max_num_filters, num_modalities,

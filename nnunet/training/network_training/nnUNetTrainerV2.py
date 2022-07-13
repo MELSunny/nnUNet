@@ -156,10 +156,11 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                     self.conv_per_stage, 2, conv_op, norm_op, norm_op_kwargs, dropout_op,
                                     dropout_op_kwargs,
                                     net_nonlin, net_nonlin_kwargs, True, False, lambda x: x, InitWeights_He(1e-2),
-                                    self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True, ASPP=True)
-        torch.onnx.export(self.network, torch.randn(1,1,*self.patch_size),os.path.join(self.output_folder, 'model.onnx'))
+                                    self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True, ASPP=True, tranformer=3, patch_size=self.patch_size)
+
         if torch.cuda.is_available():
             self.network.cuda()
+        #torch.onnx.export(self.network, torch.randn(1, 1, *self.patch_size).to(device="cuda"),os.path.join(self.output_folder, 'model.onnx'))
         self.network.inference_apply_nonlin = softmax_helper
 
     def initialize_optimizer_and_scheduler(self):

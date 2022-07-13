@@ -21,8 +21,9 @@ import numpy as np
 from nnunet.network_architecture.initialization import InitWeights_He
 from nnunet.network_architecture.neural_network import SegmentationNetwork
 import torch.nn.functional
-
-
+from monai.networks.blocks.patchembedding import PatchEmbeddingBlock
+from monai.networks.blocks.transformerblock import TransformerBlock
+from monai.networks.blocks.unetr_block import UnetrBasicBlock, UnetrPrUpBlock, UnetrUpBlock
 class ConvDropoutNormNonlin(nn.Module):
     """
     fixes a bug in ConvDropoutNormNonlin where lrelu was used regardless of nonlin. Bad.
@@ -401,7 +402,7 @@ class Generic_UNet(SegmentationNetwork):
                  conv_kernel_sizes=None,
                  upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
                  max_num_features=None, basic_block=ConvDropoutNormNonlin,
-                 seg_output_use_bias=False,ASPP= False):
+                 seg_output_use_bias=False,ASPP= 0, tranformer = 0, patch_size=None):
         """
         basically more flexible than v1, architecture is the same
 
@@ -437,7 +438,8 @@ class Generic_UNet(SegmentationNetwork):
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
         self.ASPP=ASPP
-
+        self.transformer=tranformer
+        self.patch_size=patch_size
         if conv_op == nn.Conv2d:
             upsample_mode = 'bilinear'
             pool_op = nn.MaxPool2d
@@ -479,10 +481,11 @@ class Generic_UNet(SegmentationNetwork):
         self.tu = []
         self.seg_outputs = []
 
-        output_features = base_num_features
-        input_features = input_channels
+        output_features = base_num_features if not tranformer else int(base_num_features/2)
 
-        for d in range(num_pool):
+        input_features = input_channels
+        output_features_list=[]
+        for d in range(num_pool-tranformer):
             # determine the first stride
             if d != 0 and self.convolutional_pooling:
                 first_stride = pool_op_kernel_sizes[d - 1]
@@ -497,6 +500,7 @@ class Generic_UNet(SegmentationNetwork):
                                                               self.norm_op_kwargs, self.dropout_op,
                                                               self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs,
                                                               first_stride, basic_block=basic_block))
+            output_features_list.append(output_features)
             if not self.convolutional_pooling:
                 self.td.append(pool_op(pool_op_kernel_sizes[d]))
             input_features = output_features
@@ -504,6 +508,60 @@ class Generic_UNet(SegmentationNetwork):
 
             output_features = min(output_features, self.max_num_features)
 
+        if tranformer>0:
+            if self.patch_size is None:
+                raise Exception
+            input_size=self.patch_size
+            for pool_op_kernel_size in pool_op_kernel_sizes[:max(0,num_pool-tranformer-1)]:
+                input_size=(input_size/pool_op_kernel_size).astype(int)
+
+            if conv_op == nn.Conv2d:
+                spatial_dims=2
+            else:
+                spatial_dims=3
+            #self.hidden_size=min(output_features*(feat_map_mul_on_downscale*tranformer),self.max_num_features)
+            self.hidden_size = 192
+            current_size=self.patch_size
+            for pool_op_kernel_size in pool_op_kernel_sizes[:-self.ASPP]:
+                current_size=current_size/pool_op_kernel_size
+            self.feat_size=current_size.astype(int)
+
+            self.patch_embedding = PatchEmbeddingBlock(
+                in_channels=input_features,
+                img_size=input_size,
+                patch_size=tuple(img_d // p_d for img_d, p_d in zip(input_size, self.feat_size)),
+                hidden_size=self.hidden_size,
+                num_heads=6,
+                pos_embed="conv",
+                dropout_rate=dropout_op_kwargs['p'],
+                spatial_dims=spatial_dims,
+            )
+
+            self.trans_blocks= [nn.Sequential(
+                *[TransformerBlock(self.hidden_size, 768, 6, dropout_op_kwargs['p']) for i in range(2)]
+            ) for i in range(tranformer)]
+            self.proj_axes = (0, spatial_dims + 1) + tuple(d + 1 for d in range(spatial_dims))
+            self.proj_view_shape = list(self.feat_size) + [self.hidden_size]
+            self.norm = nn.LayerNorm(self.hidden_size)
+            for i in range(tranformer-2,-1,-1):
+                up_block=UnetrPrUpBlock(
+                    spatial_dims=spatial_dims,
+                    in_channels=self.hidden_size,
+                    out_channels=output_features,
+                    num_layer=i,
+                    kernel_size=3,
+                    stride=1,
+                    upsample_kernel_size=pool_op_kernel_sizes[-self.ASPP-(i+1):-self.ASPP],
+                    norm_name='instance',
+                    conv_block=True,
+                    res_block=True)
+                self.conv_blocks_context.append(up_block)
+                output_features_list.append(output_features)
+                output_features = int(np.round(output_features * feat_map_mul_on_downscale))
+                output_features = min(output_features, self.max_num_features, self.hidden_size)
+            input_features = self.hidden_size
+
+        output_features_list.append(output_features)
 
         # now the bottleneck.
 
@@ -541,15 +599,12 @@ class Generic_UNet(SegmentationNetwork):
         if not dropout_in_localization:
             old_dropout_p = self.dropout_op_kwargs['p']
             self.dropout_op_kwargs['p'] = 0.0
-        if ASPP:
-            loop= range(1,num_pool)
-        else:
-            loop=range(num_pool)
+
         # now lets build the localization pathway
-        for u in loop:
+        for u in range(self.ASPP,num_pool):
             nfeatures_from_down = final_num_features
-            nfeatures_from_skip = self.conv_blocks_context[
-                -(2 + u)].output_channels  # self.conv_blocks_context[-1] is bottleneck, so start with -2
+            nfeatures_from_skip = output_features_list[
+                -(1 + u)]# self.conv_blocks_context[-1] is bottleneck, so start with -2
             n_features_after_tu_and_concat = nfeatures_from_skip * 2
 
             # the first conv reduces the number of features to match those of skip
@@ -584,11 +639,9 @@ class Generic_UNet(SegmentationNetwork):
         self.upscale_logits_ops = []
         if ASPP:
             cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes[:-1]), axis=0)[::-1]
-            self.aspp_1=1
         else:
             cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes), axis=0)[::-1]
-            self.aspp_1=0
-        for usl in range(num_pool - 1-self.aspp_1):
+        for usl in range(num_pool - 1-self.ASPP):
             if self.upscale_logits:
                 self.upscale_logits_ops.append(Upsample(scale_factor=tuple([int(i) for i in cum_upsample[usl + 1]]),
                                                         mode=upsample_mode))
@@ -599,6 +652,8 @@ class Generic_UNet(SegmentationNetwork):
             self.dropout_op_kwargs['p'] = old_dropout_p
 
         # register all modules properly
+        if tranformer:
+            self.trans_blocks=nn.ModuleList(self.trans_blocks)
         self.conv_blocks_localization = nn.ModuleList(self.conv_blocks_localization)
         self.conv_blocks_context = nn.ModuleList(self.conv_blocks_context)
         self.td = nn.ModuleList(self.td)
@@ -612,17 +667,36 @@ class Generic_UNet(SegmentationNetwork):
             self.apply(self.weightInitializer)
             # self.apply(print_module_training_status)
 
+    def proj_feat(self, x):
+        new_view = [x.size(0)] + self.proj_view_shape
+        x = x.view(new_view)
+        x = x.permute(self.proj_axes).contiguous()
+        return x
+
     def forward(self, x):
         skips = []
         seg_outputs = []
-        for d in range(len(self.conv_blocks_context) - 1):
+        for d in range(len(self.conv_blocks_context)-self.transformer):
             x = self.conv_blocks_context[d](x)
             skips.append(x)
             if not self.convolutional_pooling:
                 x = self.td[d](x)
+        if self.transformer:
+            x = self.patch_embedding(x)
+            hidden_states_out = []
+            for blk in self.trans_blocks:
+                x = blk(x)
+                hidden_states_out.append(x)
+            hidden_states_out.pop()
+
+            for d in range(self.transformer-1):
+                skips.append(self.conv_blocks_context[len(self.conv_blocks_context)-self.transformer+d](self.proj_feat(hidden_states_out[d])))
+
+            x = self.norm(x)
+            x = self.proj_feat(x)
 
         x = self.conv_blocks_context[-1](x)
-        if self.ASPP:
+        if self.ASPP and not self.transformer:
             skips.pop()
         for u in range(len(self.tu)):
             x = self.tu[u](x)
