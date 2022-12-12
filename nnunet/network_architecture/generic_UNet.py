@@ -481,7 +481,7 @@ class Generic_UNet(SegmentationNetwork):
         self.tu = []
         self.seg_outputs = []
 
-        output_features = base_num_features if not tranformer else int(base_num_features/2)
+        output_features = base_num_features
 
         input_features = input_channels
         output_features_list=[]
@@ -561,7 +561,7 @@ class Generic_UNet(SegmentationNetwork):
                 output_features = min(output_features, self.max_num_features, self.hidden_size)
             input_features = self.hidden_size
 
-        output_features_list.append(output_features)
+            output_features_list.append(output_features)
 
         # now the bottleneck.
 
@@ -676,28 +676,34 @@ class Generic_UNet(SegmentationNetwork):
     def forward(self, x):
         skips = []
         seg_outputs = []
-        for d in range(len(self.conv_blocks_context)-self.transformer):
+        for d in range(len(self.conv_blocks_context)-self.transformer-1):
             x = self.conv_blocks_context[d](x)
             skips.append(x)
             if not self.convolutional_pooling:
                 x = self.td[d](x)
         if self.transformer:
+            x = self.conv_blocks_context[len(self.conv_blocks_context)-self.transformer-1](x)
+            skips.append(x)
+            if not self.convolutional_pooling:
+                x = self.td[len(self.conv_blocks_context)-self.transformer-1](x)
             x = self.patch_embedding(x)
             hidden_states_out = []
-            for blk in self.trans_blocks:
+            for i,blk in  enumerate(self.trans_blocks):
                 x = blk(x)
-                hidden_states_out.append(x)
-            hidden_states_out.pop()
+                if i<len(self.trans_blocks)-1:
+                    hidden_states_out.append(x)
 
-            for d in range(self.transformer-1):
+            if self.ASPP and not self.transformer:
+                t=1
+            else:
+                t=0
+            for d in range(self.transformer-1-t):
                 skips.append(self.conv_blocks_context[len(self.conv_blocks_context)-self.transformer+d](self.proj_feat(hidden_states_out[d])))
-
+            del hidden_states_out
             x = self.norm(x)
             x = self.proj_feat(x)
 
         x = self.conv_blocks_context[-1](x)
-        if self.ASPP and not self.transformer:
-            skips.pop()
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skips[-(u + 1)]), dim=1)
