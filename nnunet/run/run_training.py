@@ -60,6 +60,10 @@ def main():
                         help="hands off. This is not intended to be used")
     parser.add_argument("--fp32", required=False, default=False, action="store_true",
                         help="disable mixed precision training and run old school fp32")
+    parser.add_argument("--ASPP", required=False, default=False, action="store_true",
+                        help="enable ASPP")
+    parser.add_argument("-transformer", required=False, default=0,type=int,
+                        help="transformer")
     parser.add_argument("--val_folder", required=False, default="validation_raw",
                         help="name of the validation folder. No need to use this for most people")
     parser.add_argument("--disable_saving", required=False, action='store_true',
@@ -91,7 +95,8 @@ def main():
                              'Optional. Beta. Use with caution.')
 
     args = parser.parse_args()
-
+    ASPP=args.ASPP
+    transformer=args.transformer
     task = args.task
     fold = args.fold
     network = args.network
@@ -151,7 +156,7 @@ def main():
     trainer = trainer_class(plans_file, fold, output_folder=output_folder_name, dataset_directory=dataset_directory,
                             batch_dice=batch_dice, stage=stage, unpack_data=decompress_data,
                             deterministic=deterministic,
-                            fp16=run_mixed_precision)
+                            fp16=run_mixed_precision,ASPP=ASPP,transformer=transformer)
     if args.disable_saving:
         trainer.save_final_checkpoint = False # whether or not to save the final checkpoint
         trainer.save_best_checkpoint = False  # whether or not to save the best checkpoint according to

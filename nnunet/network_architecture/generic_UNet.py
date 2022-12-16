@@ -509,6 +509,7 @@ class Generic_UNet(SegmentationNetwork):
             output_features = min(output_features, self.max_num_features)
 
         if tranformer>0:
+            output_features=int(output_features/2)  ## 128x8x48x48
             if self.patch_size is None:
                 raise Exception
             input_size=self.patch_size
@@ -681,6 +682,7 @@ class Generic_UNet(SegmentationNetwork):
             skips.append(x)
             if not self.convolutional_pooling:
                 x = self.td[d](x)
+
         if self.transformer:
             x = self.conv_blocks_context[len(self.conv_blocks_context)-self.transformer-1](x)
             skips.append(x)
@@ -702,7 +704,8 @@ class Generic_UNet(SegmentationNetwork):
             del hidden_states_out
             x = self.norm(x)
             x = self.proj_feat(x)
-
+        if self.ASPP and not self.transformer:
+            skips.pop()
         x = self.conv_blocks_context[-1](x)
         for u in range(len(self.tu)):
             x = self.tu[u](x)
